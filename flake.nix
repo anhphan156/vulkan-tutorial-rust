@@ -24,14 +24,23 @@
         pkgs = import nixpkgs {
           inherit system overlays;
         };
+
+        vulkanLibs = with pkgs; [
+          vulkan-tools
+          vulkan-loader
+          vulkan-headers
+          vulkan-validation-layers
+        ];
       in
         with pkgs; {
           devShells.default = mkShell {
-            RUST_BACKTRACE=1;
+            RUST_BACKTRACE = 1;
+            LD_LIBRARY_PATH = lib.makeLibraryPath vulkanLibs;
             packages = [
               pkg-config
               cmake
               rust-toolchain
+              shaderc
             ];
             buildInputs = [
               wayland
@@ -43,7 +52,7 @@
               xorg.libXcursor
               xorg.libXi
               xorg.libXext
-            ];
+            ] ++ vulkanLibs;
           };
         }
     );

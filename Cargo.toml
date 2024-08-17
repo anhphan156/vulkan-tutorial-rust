@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-glfw = "0.57.0"
+ash = "0.38.0"
+glfw = {version = "0.57.0", features = ["vulkan"]}
