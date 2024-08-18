@@ -1,9 +1,9 @@
 extern crate glfw;
 
-use std::{ffi::CString, ptr};
-
+use crate::util::constants::{WINDOW_HEIGHT, WINDOW_WIDTH};
 use ash::{vk, Entry};
 use glfw::{ffi::glfwTerminate, Action, ClientApiHint, Key, WindowEvent, WindowHint};
+use std::{ffi::CString, ptr};
 
 pub struct App {
     app_window: AppWindow,
@@ -45,7 +45,13 @@ impl App {
         };
 
         let glfw = app_window.glfw.as_ref().unwrap();
-        let _extension_names = glfw.get_required_instance_extensions().unwrap();
+        let extension_names = glfw.get_required_instance_extensions().unwrap();
+        let cstr_ext_names: Vec<_> = extension_names
+            .iter()
+            .map(|x| CString::new(x.as_str()).unwrap())
+            .collect();
+        let mut pp_ext_names: Vec<_> = cstr_ext_names.iter().map(|x| x.as_ptr()).collect();
+        pp_ext_names.push(ptr::null());
 
         let create_info = vk::InstanceCreateInfo {
             s_type: vk::StructureType::INSTANCE_CREATE_INFO,
@@ -54,7 +60,8 @@ impl App {
             p_application_info: &app_info,
             pp_enabled_layer_names: ptr::null(),
             enabled_layer_count: 0,
-            //pp_enabled_extension_names: extension_names.as_ptr(),
+            pp_enabled_extension_names: pp_ext_names.as_ptr(),
+            enabled_extension_count: extension_names.len() as u32,
             ..Default::default()
         };
 
@@ -79,7 +86,12 @@ impl App {
             glfw.window_hint(WindowHint::ClientApi(ClientApiHint::NoApi));
 
             let (w, e) = glfw
-                .create_window(800, 600, "Hello this is window", glfw::WindowMode::Windowed)
+                .create_window(
+                    WINDOW_WIDTH,
+                    WINDOW_HEIGHT,
+                    "Hello this is window",
+                    glfw::WindowMode::Windowed,
+                )
                 .expect("Failed to create GLFW window.");
 
             app_window.window = Some(w);
