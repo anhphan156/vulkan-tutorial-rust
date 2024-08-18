@@ -289,8 +289,8 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_device(None);
             self.instance.destroy_instance(None);
-            glfwTerminate();
         }
     }
 }
