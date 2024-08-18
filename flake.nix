@@ -29,7 +29,6 @@
           vulkan-tools
           vulkan-loader
           vulkan-headers
-          vulkan-validation-layers
         ];
       in
         with pkgs; {
@@ -41,18 +40,21 @@
               cmake
               rust-toolchain
               shaderc
+              vulkan-validation-layers
             ];
-            buildInputs = [
-              wayland
-              wayland-protocols
-              libxkbcommon
-              xorg.libX11
-              xorg.libXrandr
-              xorg.libXinerama
-              xorg.libXcursor
-              xorg.libXi
-              xorg.libXext
-            ] ++ vulkanLibs;
+            buildInputs =
+              [
+                wayland
+                wayland-protocols
+                libxkbcommon
+                xorg.libX11
+                xorg.libXrandr
+                xorg.libXinerama
+                xorg.libXcursor
+                xorg.libXi
+                xorg.libXext
+              ]
+              ++ vulkanLibs;
           };
         }
     );

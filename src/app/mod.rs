@@ -1,6 +1,7 @@
 extern crate glfw;
 
-use crate::util::constants::{WINDOW_HEIGHT, WINDOW_WIDTH};
+use crate::util::constants::{VALIDATION, WINDOW_HEIGHT, WINDOW_WIDTH};
+use crate::util::debug;
 use ash::{vk, Entry};
 use glfw::{ffi::glfwTerminate, Action, ClientApiHint, Key, WindowEvent, WindowHint};
 use std::{ffi::CString, ptr};
@@ -31,6 +32,12 @@ impl App {
         }
     }
     fn create_instance(entry: &ash::Entry, app_window: &AppWindow) -> ash::Instance {
+        if VALIDATION.enabled
+            && !debug::check_validation_layer_support(entry, &VALIDATION.required_validation_layers)
+        {
+            panic!("Validation layer requested, but not available");
+        }
+
         let app_name = CString::new("Vulkan App").unwrap();
         let engine_name = CString::new("Vulkan App").unwrap();
         let app_info = vk::ApplicationInfo {
@@ -44,6 +51,7 @@ impl App {
             ..Default::default()
         };
 
+        // Get Extension names
         let glfw = app_window.glfw.as_ref().unwrap();
         let extension_names = glfw.get_required_instance_extensions().unwrap();
         let cstr_ext_names: Vec<_> = extension_names
@@ -53,15 +61,31 @@ impl App {
         let mut pp_ext_names: Vec<_> = cstr_ext_names.iter().map(|x| x.as_ptr()).collect();
         pp_ext_names.push(ptr::null());
 
+        // Get Layers names
+        let cstr_layer_names: Vec<_> = VALIDATION
+            .required_validation_layers
+            .iter()
+            .map(|x| CString::new(*x).unwrap())
+            .collect();
+        let pp_layer_names: Vec<*const i8> = cstr_layer_names.iter().map(|x| x.as_ptr()).collect();
+
         let create_info = vk::InstanceCreateInfo {
             s_type: vk::StructureType::INSTANCE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::InstanceCreateFlags::empty(),
             p_application_info: &app_info,
-            pp_enabled_layer_names: ptr::null(),
-            enabled_layer_count: 0,
             pp_enabled_extension_names: pp_ext_names.as_ptr(),
             enabled_extension_count: extension_names.len() as u32,
+            pp_enabled_layer_names: if VALIDATION.enabled {
+                pp_layer_names.as_ptr()
+            } else {
+                ptr::null()
+            },
+            enabled_layer_count: if VALIDATION.enabled {
+                VALIDATION.required_validation_layers.len()
+            } else {
+                0
+            } as u32,
             ..Default::default()
         };
 
