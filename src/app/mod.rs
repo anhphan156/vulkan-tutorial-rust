@@ -6,6 +6,7 @@ use ash::vk::Handle;
 use ash::{vk, Entry};
 use core::panic;
 use glfw::{ffi::glfwTerminate, Action, ClientApiHint, Key, WindowEvent, WindowHint};
+use std::collections::HashSet;
 use std::ptr::null;
 use std::{ffi::CString, ptr};
 
@@ -16,6 +17,7 @@ pub struct App {
     physical_device: vk::PhysicalDevice,
     device: ash::Device,
     graphic_queue: vk::Queue,
+    present_queue: vk::Queue,
     surface_stuff: SurfaceStuff,
 }
 
@@ -48,10 +50,13 @@ impl App {
 
         let entry = unsafe { Entry::load() }.unwrap();
         let instance = App::create_instance(&entry, &app_window);
-        let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
-        let surface = App::create_surface(&instance.handle(), &window);
-        let physical_device = App::pick_physical_device(&instance);
-        let (device, graphic_queue) = App::create_logical_device(&instance, &physical_device);
+        let surface_stuff = App::create_surface(&entry, &instance, &window);
+        let physical_device = App::pick_physical_device(&instance, &surface_stuff);
+        let (device, indices) =
+            App::create_logical_device(&instance, &physical_device, &surface_stuff);
+
+        let graphic_queue = unsafe { device.get_device_queue(indices.graphics_family.unwrap(), 0) };
+        let present_queue = unsafe { device.get_device_queue(indices.present_family.unwrap(), 0) };
 
         App {
             _entry: entry,
@@ -60,8 +65,8 @@ impl App {
             physical_device,
             device,
             graphic_queue,
-            surface,
-            surface_loader,
+            present_queue,
+            surface_stuff,
         }
     }
     fn create_instance(entry: &ash::Entry, app_window: &AppWindow) -> ash::Instance {
@@ -134,19 +139,27 @@ impl App {
     fn create_logical_device(
         instance: &ash::Instance,
         physical_device: &vk::PhysicalDevice,
-    ) -> (ash::Device, vk::Queue) {
-        let indices = App::find_queue_family(instance, physical_device);
+        surface_stuff: &SurfaceStuff,
+    ) -> (ash::Device, QueueFamilyIndices) {
+        let indices = App::find_queue_family(instance, physical_device, surface_stuff);
+        let mut unique_queue_families = HashSet::new();
+        unique_queue_families.insert(indices.graphics_family);
+        unique_queue_families.insert(indices.present_family);
 
+        let mut queue_create_infos = vec![];
         let queue_priorities = [1.0_f32];
-        let queue_create_info = vk::DeviceQueueCreateInfo {
-            s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
-            p_next: ptr::null(),
-            flags: vk::DeviceQueueCreateFlags::empty(),
-            queue_family_index: indices.graphics_family.unwrap(),
-            p_queue_priorities: queue_priorities.as_ptr(),
-            queue_count: 1,
-            ..Default::default()
-        };
+        for &queue_family in unique_queue_families.iter() {
+            let queue_create_info = vk::DeviceQueueCreateInfo {
+                s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::DeviceQueueCreateFlags::empty(),
+                queue_family_index: queue_family.unwrap(),
+                p_queue_priorities: queue_priorities.as_ptr(),
+                queue_count: 1,
+                ..Default::default()
+            };
+            queue_create_infos.push(queue_create_info);
+        }
 
         let physical_device_features = vk::PhysicalDeviceFeatures {
             ..Default::default()
@@ -164,8 +177,8 @@ impl App {
             s_type: vk::StructureType::DEVICE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::DeviceCreateFlags::empty(),
-            queue_create_info_count: 1,
-            p_queue_create_infos: &queue_create_info,
+            queue_create_info_count: queue_create_infos.len() as u32,
+            p_queue_create_infos: queue_create_infos.as_ptr(),
             enabled_layer_count: if VALIDATION.enabled {
                 VALIDATION.required_validation_layers.len()
             } else {
@@ -188,22 +201,32 @@ impl App {
                 .expect("Failed to create logical device")
         };
 
-        let graphic_queue = unsafe { device.get_device_queue(indices.graphics_family.unwrap(), 0) };
-
-        (device, graphic_queue)
+        (device, indices)
     }
 
-    fn create_surface(instance: &ash::vk::Instance, window: &glfw::Window) -> ash::vk::SurfaceKHR {
+    fn create_surface(
+        entry: &ash::Entry,
+        instance: &ash::Instance,
+        window: &glfw::Window,
+    ) -> SurfaceStuff {
         let surface = Box::new(vk::SurfaceKHR::null());
         let p_surface = Box::into_raw(surface.clone());
 
-        match window.create_window_surface(*instance, ptr::null(), p_surface) {
-            vk::Result::SUCCESS => unsafe { *p_surface },
+        let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
+
+        match window.create_window_surface(instance.handle(), ptr::null(), p_surface) {
+            vk::Result::SUCCESS => SurfaceStuff {
+                surface: unsafe { *p_surface },
+                surface_loader,
+            },
             _ => panic!("Failed to create surface"),
         }
     }
 
-    fn pick_physical_device(instance: &ash::Instance) -> vk::PhysicalDevice {
+    fn pick_physical_device(
+        instance: &ash::Instance,
+        surface_stuff: &SurfaceStuff,
+    ) -> vk::PhysicalDevice {
         let physical_devices = unsafe {
             instance
                 .enumerate_physical_devices()
@@ -216,7 +239,7 @@ impl App {
 
         let mut result = None;
         for &physical_device in physical_devices.iter() {
-            if App::is_physical_device_suitable(instance, &physical_device) {
+            if App::is_physical_device_suitable(instance, &physical_device, surface_stuff) {
                 result = Some(physical_device);
             }
         }
@@ -230,16 +253,16 @@ impl App {
     fn is_physical_device_suitable(
         instance: &ash::Instance,
         physical_device: &vk::PhysicalDevice,
+        surface_stuff: &SurfaceStuff,
     ) -> bool {
-        let indices = App::find_queue_family(instance, physical_device);
+        let indices = App::find_queue_family(instance, physical_device, surface_stuff);
         indices.is_complete()
     }
 
     fn find_queue_family(
         instance: &ash::Instance,
         physical_device: &vk::PhysicalDevice,
-        surface_loader: &ash::khr::surface::Instance,
-        surface: &vk::SurfaceKHR,
+        surface_stuff: &SurfaceStuff,
     ) -> QueueFamilyIndices {
         let queue_families =
             unsafe { instance.get_physical_device_queue_family_properties(*physical_device) };
@@ -258,13 +281,15 @@ impl App {
             }
 
             let present_support = unsafe {
-                surface_loader.get_physical_device_surface_support(
-                    *physical_device,
-                    index,
-                    *surface,
-                )
+                surface_stuff
+                    .surface_loader
+                    .get_physical_device_surface_support(
+                        *physical_device,
+                        index,
+                        surface_stuff.surface,
+                    )
             }
-            .unwrap();
+            .unwrap_or(false);
 
             if present_support {
                 queue_family_indices.present_family = Some(index);
@@ -328,6 +353,9 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         unsafe {
+            self.surface_stuff
+                .surface_loader
+                .destroy_surface(self.surface_stuff.surface, None);
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
         }
