@@ -2,8 +2,11 @@ extern crate glfw;
 
 use crate::util::constants::{VALIDATION, WINDOW_HEIGHT, WINDOW_WIDTH};
 use crate::util::debug;
+use ash::vk::Handle;
 use ash::{vk, Entry};
+use core::panic;
 use glfw::{ffi::glfwTerminate, Action, ClientApiHint, Key, WindowEvent, WindowHint};
+use std::ptr::null;
 use std::{ffi::CString, ptr};
 
 pub struct App {
@@ -13,6 +16,7 @@ pub struct App {
     physical_device: vk::PhysicalDevice,
     device: ash::Device,
     graphic_queue: vk::Queue,
+    surface_stuff: SurfaceStuff,
 }
 
 struct AppWindow {
@@ -26,18 +30,26 @@ struct QueueFamilyIndices {
     present_family: Option<u32>,
 }
 
+struct SurfaceStuff {
+    surface: vk::SurfaceKHR,
+    surface_loader: ash::khr::surface::Instance,
+}
+
 impl QueueFamilyIndices {
     pub fn is_complete(&self) -> bool {
-        self.graphics_family.is_some()
+        self.graphics_family.is_some() && self.present_family.is_some()
     }
 }
 
 impl App {
     pub fn new() -> App {
         let app_window = App::init_window();
+        let window = app_window.window.as_ref().unwrap();
 
         let entry = unsafe { Entry::load() }.unwrap();
         let instance = App::create_instance(&entry, &app_window);
+        let surface_loader = ash::khr::surface::Instance::new(&entry, &instance);
+        let surface = App::create_surface(&instance.handle(), &window);
         let physical_device = App::pick_physical_device(&instance);
         let (device, graphic_queue) = App::create_logical_device(&instance, &physical_device);
 
@@ -48,6 +60,8 @@ impl App {
             physical_device,
             device,
             graphic_queue,
+            surface,
+            surface_loader,
         }
     }
     fn create_instance(entry: &ash::Entry, app_window: &AppWindow) -> ash::Instance {
@@ -179,6 +193,16 @@ impl App {
         (device, graphic_queue)
     }
 
+    fn create_surface(instance: &ash::vk::Instance, window: &glfw::Window) -> ash::vk::SurfaceKHR {
+        let surface = Box::new(vk::SurfaceKHR::null());
+        let p_surface = Box::into_raw(surface.clone());
+
+        match window.create_window_surface(*instance, ptr::null(), p_surface) {
+            vk::Result::SUCCESS => unsafe { *p_surface },
+            _ => panic!("Failed to create surface"),
+        }
+    }
+
     fn pick_physical_device(instance: &ash::Instance) -> vk::PhysicalDevice {
         let physical_devices = unsafe {
             instance
@@ -214,6 +238,8 @@ impl App {
     fn find_queue_family(
         instance: &ash::Instance,
         physical_device: &vk::PhysicalDevice,
+        surface_loader: &ash::khr::surface::Instance,
+        surface: &vk::SurfaceKHR,
     ) -> QueueFamilyIndices {
         let queue_families =
             unsafe { instance.get_physical_device_queue_family_properties(*physical_device) };
@@ -229,6 +255,19 @@ impl App {
                 && queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS)
             {
                 queue_family_indices.graphics_family = Some(index);
+            }
+
+            let present_support = unsafe {
+                surface_loader.get_physical_device_surface_support(
+                    *physical_device,
+                    index,
+                    *surface,
+                )
+            }
+            .unwrap();
+
+            if present_support {
+                queue_family_indices.present_family = Some(index);
             }
 
             if queue_family_indices.is_complete() {
