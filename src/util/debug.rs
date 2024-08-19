@@ -1,8 +1,3 @@
-pub struct ValidationInfo {
-    pub enabled: bool,
-    pub required_validation_layers: [&'static str; 1],
-}
-
 pub fn check_validation_layer_support(
     entry: &ash::Entry,
     required_validation_layers: &[&'static str],
