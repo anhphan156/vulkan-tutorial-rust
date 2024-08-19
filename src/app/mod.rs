@@ -6,7 +6,7 @@ use crate::util::structures::{
 };
 use crate::util::{debug, tools};
 use ash::{vk, Entry};
-use core::{num, panic};
+use core::panic;
 use glfw::{Action, ClientApiHint, Key, WindowHint};
 use std::collections::HashSet;
 use std::u32;
@@ -16,12 +16,13 @@ pub struct App {
     app_window: AppWindow,
     _entry: ash::Entry,
     instance: ash::Instance,
-    physical_device: vk::PhysicalDevice,
+    _physical_device: vk::PhysicalDevice,
     device: ash::Device,
-    graphic_queue: vk::Queue,
-    present_queue: vk::Queue,
+    _graphic_queue: vk::Queue,
+    _present_queue: vk::Queue,
     surface_stuff: SurfaceStuff,
     swapchain_stuff: SwapChainStuff,
+    swapchain_imageviews: Vec<vk::ImageView>,
 }
 
 impl App {
@@ -47,16 +48,19 @@ impl App {
             &queue_family,
         );
 
+        let swapchain_imageviews = App::create_image_view(&device, &swapchain_stuff);
+
         App {
             _entry: entry,
             app_window,
             instance,
-            physical_device,
+            _physical_device: physical_device,
             device,
-            graphic_queue,
-            present_queue,
+            _graphic_queue: graphic_queue,
+            _present_queue: present_queue,
             surface_stuff,
             swapchain_stuff,
+            swapchain_imageviews,
         }
     }
     fn create_instance(entry: &ash::Entry, app_window: &AppWindow) -> ash::Instance {
@@ -293,6 +297,46 @@ impl App {
             swapchain_format: surface_format.format,
             swapchain_extent: extent,
         }
+    }
+
+    fn create_image_view(
+        device: &ash::Device,
+        swapchain_stuff: &SwapChainStuff,
+    ) -> Vec<vk::ImageView> {
+        let mut swapchain_imageviews = vec![];
+
+        for &image in swapchain_stuff.swapchain_images.iter() {
+            let create_info = vk::ImageViewCreateInfo {
+                s_type: vk::StructureType::IMAGE_VIEW_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::ImageViewCreateFlags::empty(),
+                image,
+                view_type: vk::ImageViewType::TYPE_2D,
+                format: swapchain_stuff.swapchain_format,
+                components: vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::IDENTITY,
+                    g: vk::ComponentSwizzle::IDENTITY,
+                    b: vk::ComponentSwizzle::IDENTITY,
+                    a: vk::ComponentSwizzle::IDENTITY,
+                },
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                _marker: std::marker::PhantomData,
+            };
+            let imageview = unsafe {
+                device
+                    .create_image_view(&create_info, None)
+                    .expect("Failed to create image view")
+            };
+            swapchain_imageviews.push(imageview);
+        }
+
+        swapchain_imageviews
     }
 
     fn pick_physical_device(
@@ -535,6 +579,9 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         unsafe {
+            for &imageview in &self.swapchain_imageviews {
+                self.device.destroy_image_view(imageview, None);
+            }
             self.swapchain_stuff
                 .swapchain_loader
                 .destroy_swapchain(self.swapchain_stuff.swapchain, None);
