@@ -1,3 +1,4 @@
+pub mod graphics_pipeline;
 extern crate glfw;
 
 use crate::util::constants::{DEVICE_EXTENSIONS, VALIDATION, WINDOW_HEIGHT, WINDOW_WIDTH};
@@ -49,6 +50,8 @@ impl App {
         );
 
         let swapchain_imageviews = App::create_image_view(&device, &swapchain_stuff);
+
+        graphics_pipeline::create_graphics_pipeline(&device);
 
         App {
             _entry: entry,
