@@ -49,3 +49,9 @@ pub struct GraphicsPipelineStuff {
     pub graphics_pipeline: vk::Pipeline,
     pub pipeline_layout: vk::PipelineLayout,
 }
+
+pub struct SyncObjects {
+    pub image_available_semaphore: vk::Semaphore,
+    pub render_finished_semaphore: vk::Semaphore,
+    pub in_flight_fence: vk::Fence,
+}

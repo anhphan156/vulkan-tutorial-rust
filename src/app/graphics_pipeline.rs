@@ -192,12 +192,24 @@ pub fn creat_render_pass(device: &ash::Device, swapchain_format: vk::Format) -> 
         ..Default::default()
     };
 
+    let dependency = vk::SubpassDependency {
+        src_subpass: vk::SUBPASS_EXTERNAL,
+        dst_subpass: 0,
+        src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+        src_access_mask: vk::AccessFlags::empty(),
+        dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+        dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+        ..Default::default()
+    };
+
     let render_pass_info = vk::RenderPassCreateInfo {
         s_type: vk::StructureType::RENDER_PASS_CREATE_INFO,
         attachment_count: 1,
         p_attachments: &color_attachment,
         subpass_count: 1,
         p_subpasses: &subpass,
+        dependency_count: 1,
+        p_dependencies: &dependency,
         ..Default::default()
     };
 

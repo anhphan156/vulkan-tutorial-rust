@@ -4,9 +4,10 @@ extern crate glfw;
 use crate::util::constants::{DEVICE_EXTENSIONS, VALIDATION, WINDOW_HEIGHT, WINDOW_WIDTH};
 use crate::util::structures::{
     AppWindow, GraphicsPipelineStuff, QueueFamilyIndices, SurfaceStuff, SwapChainStuff,
-    SwapChainSupportDetails,
+    SwapChainSupportDetails, SyncObjects,
 };
 use crate::util::{debug, tools};
+use ash::vk::CommandBufferResetFlags;
 use ash::{vk, Entry};
 use core::panic;
 use glfw::{Action, ClientApiHint, Key, WindowHint};
@@ -27,6 +28,10 @@ pub struct App {
     swapchain_imageviews: Vec<vk::ImageView>,
     graphics_pipeline_stuff: GraphicsPipelineStuff,
     render_pass: vk::RenderPass,
+    framebuffers: Vec<vk::Framebuffer>,
+    command_pool: vk::CommandPool,
+    command_buffer: vk::CommandBuffer,
+    sync_objects: SyncObjects,
 }
 
 impl App {
@@ -60,6 +65,18 @@ impl App {
         let graphics_pipeline_stuff =
             graphics_pipeline::create_graphics_pipeline(&device, render_pass.clone());
 
+        let framebuffers = App::create_frame_buffers(
+            &device,
+            &swapchain_imageviews,
+            swapchain_stuff.swapchain_extent,
+            render_pass,
+        );
+
+        let command_pool = App::create_command_pool(&device, &queue_family);
+        let command_buffer = App::create_command_buffer(&device, command_pool);
+
+        let sync_objects = App::create_sync_objects(&device);
+
         App {
             _entry: entry,
             app_window,
@@ -73,6 +90,10 @@ impl App {
             swapchain_imageviews,
             graphics_pipeline_stuff,
             render_pass,
+            framebuffers,
+            command_pool,
+            command_buffer,
+            sync_objects,
         }
     }
     fn create_instance(entry: &ash::Entry, app_window: &AppWindow) -> ash::Instance {
@@ -351,6 +372,175 @@ impl App {
         swapchain_imageviews
     }
 
+    fn create_frame_buffers(
+        device: &ash::Device,
+        swapchain_imageviews: &Vec<vk::ImageView>,
+        swapchain_extent: vk::Extent2D,
+        render_pass: vk::RenderPass,
+    ) -> Vec<vk::Framebuffer> {
+        swapchain_imageviews
+            .iter()
+            .map(|x| {
+                let frame_buffer_info = vk::FramebufferCreateInfo {
+                    s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
+                    render_pass,
+                    attachment_count: 1,
+                    p_attachments: x,
+                    width: swapchain_extent.width,
+                    height: swapchain_extent.height,
+                    layers: 1,
+                    ..Default::default()
+                };
+
+                unsafe {
+                    device
+                        .create_framebuffer(&frame_buffer_info, None)
+                        .expect("Failed to create frambuffer")
+                }
+            })
+            .collect()
+    }
+
+    fn create_command_pool(
+        device: &ash::Device,
+        queue_family: &QueueFamilyIndices,
+    ) -> vk::CommandPool {
+        let pool_info = vk::CommandPoolCreateInfo {
+            s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
+            flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+            queue_family_index: queue_family.graphics_family.unwrap(),
+            ..Default::default()
+        };
+
+        unsafe {
+            device
+                .create_command_pool(&pool_info, None)
+                .expect("Failed to create command pool")
+        }
+    }
+
+    fn create_command_buffer(
+        device: &ash::Device,
+        command_pool: vk::CommandPool,
+    ) -> vk::CommandBuffer {
+        let alloc_info = vk::CommandBufferAllocateInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            command_pool,
+            level: vk::CommandBufferLevel::PRIMARY,
+            command_buffer_count: 1,
+            ..Default::default()
+        };
+
+        unsafe {
+            device
+                .allocate_command_buffers(&alloc_info)
+                .expect("Failed to allocate command buffers")
+                .first()
+                .unwrap()
+                .clone()
+        }
+    }
+
+    fn create_sync_objects(device: &ash::Device) -> SyncObjects {
+        let semaphore_info = vk::SemaphoreCreateInfo {
+            s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
+            ..Default::default()
+        };
+
+        let fence_info = vk::FenceCreateInfo {
+            s_type: vk::StructureType::FENCE_CREATE_INFO,
+            flags: vk::FenceCreateFlags::SIGNALED,
+            ..Default::default()
+        };
+
+        unsafe {
+            let image_available_semaphore = device
+                .create_semaphore(&semaphore_info, None)
+                .expect("Failed to create semaphore");
+            let render_finished_semaphore = device
+                .create_semaphore(&semaphore_info, None)
+                .expect("Failed to create semaphore");
+            let in_flight_fence = device
+                .create_fence(&fence_info, None)
+                .expect("Failed to create fence");
+
+            SyncObjects {
+                image_available_semaphore,
+                render_finished_semaphore,
+                in_flight_fence,
+            }
+        }
+    }
+
+    fn record_command_buffer(&self, command_buffer: vk::CommandBuffer, image_index: u32) {
+        let begin_info = vk::CommandBufferBeginInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_SUBMIT_INFO,
+            ..Default::default()
+        };
+
+        unsafe {
+            self.device
+                .begin_command_buffer(command_buffer, &begin_info)
+                .expect("Failed to begin recording command buffer")
+        };
+
+        let clear_color = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.0_f32, 0.0_f32, 0.0_f32, 1.0_f32],
+            },
+        };
+        let renderpass_info = vk::RenderPassBeginInfo {
+            s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
+            render_pass: self.render_pass,
+            framebuffer: self.framebuffers[image_index as usize],
+            render_area: vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: self.swapchain_stuff.swapchain_extent,
+            },
+            clear_value_count: 1,
+            p_clear_values: &clear_color,
+            ..Default::default()
+        };
+
+        unsafe {
+            self.device.cmd_begin_render_pass(
+                command_buffer,
+                &renderpass_info,
+                vk::SubpassContents::INLINE,
+            );
+
+            self.device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.graphics_pipeline_stuff.graphics_pipeline,
+            );
+        };
+
+        let viewport = vk::Viewport {
+            x: 0.0_f32,
+            y: 0.0_f32,
+            width: self.swapchain_stuff.swapchain_extent.width as f32,
+            height: self.swapchain_stuff.swapchain_extent.height as f32,
+            min_depth: 0.0_f32,
+            max_depth: 1.0_f32,
+        };
+
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: self.swapchain_stuff.swapchain_extent,
+        };
+
+        unsafe {
+            self.device.cmd_set_viewport(command_buffer, 0, &[viewport]);
+            self.device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+            self.device.cmd_draw(command_buffer, 3, 1, 0, 0);
+            self.device.cmd_end_render_pass(command_buffer);
+            self.device
+                .end_command_buffer(command_buffer)
+                .expect("Failed to record command buffer");
+        };
+    }
+
     fn pick_physical_device(
         instance: &ash::Instance,
         surface_stuff: &SurfaceStuff,
@@ -543,6 +733,73 @@ impl App {
         queue_family_indices
     }
 
+    fn draw_frame(&mut self) {
+        unsafe {
+            let _ = self.device.wait_for_fences(
+                &[self.sync_objects.in_flight_fence],
+                true,
+                u64::max_value(),
+            );
+
+            let _ = self
+                .device
+                .reset_fences(&[self.sync_objects.in_flight_fence]);
+
+            let Ok((image_index, _)) = self.swapchain_stuff.swapchain_loader.acquire_next_image(
+                self.swapchain_stuff.swapchain,
+                u64::max_value(),
+                self.sync_objects.image_available_semaphore,
+                vk::Fence::null(),
+            ) else {
+                panic!("failed to acquire next images")
+            };
+
+            let _ = self
+                .device
+                .reset_command_buffer(self.command_buffer, CommandBufferResetFlags::empty());
+
+            self.record_command_buffer(self.command_buffer.clone(), image_index);
+
+            let wait_semaphores = [self.sync_objects.image_available_semaphore];
+            let signal_semaphores = [self.sync_objects.render_finished_semaphore];
+            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+            let submit_info = vk::SubmitInfo {
+                s_type: vk::StructureType::SUBMIT_INFO,
+                p_wait_semaphores: wait_semaphores.as_ptr(),
+                p_wait_dst_stage_mask: wait_stages.as_ptr(),
+                command_buffer_count: 1,
+                p_command_buffers: &self.command_buffer,
+                signal_semaphore_count: 1,
+                p_signal_semaphores: signal_semaphores.as_ptr(),
+                ..Default::default()
+            };
+
+            self.device
+                .queue_submit(
+                    self._graphic_queue,
+                    &[submit_info],
+                    self.sync_objects.in_flight_fence,
+                )
+                .expect("Failed to submit draw command buffer");
+
+            let swapchains = [self.swapchain_stuff.swapchain];
+            let present_info = vk::PresentInfoKHR {
+                s_type: vk::StructureType::PRESENT_INFO_KHR,
+                wait_semaphore_count: 1,
+                p_wait_semaphores: signal_semaphores.as_ptr(),
+                swapchain_count: 1,
+                p_swapchains: swapchains.as_ptr(),
+                p_image_indices: &image_index,
+                ..Default::default()
+            };
+
+            self.swapchain_stuff
+                .swapchain_loader
+                .queue_present(self._present_queue, &present_info)
+                .expect("Failed to present");
+        };
+    }
+
     fn init_window() -> AppWindow {
         let mut app_window = AppWindow {
             window: None,
@@ -575,15 +832,22 @@ impl App {
         app_window
     }
     pub fn main_loop(&mut self) {
-        let mut window = self.app_window.window.as_mut().unwrap();
-        let events = self.app_window.events.as_ref().unwrap();
-        while !window.should_close() {
-            if let Some(ref mut glfw) = self.app_window.glfw {
-                glfw.poll_events();
+        if let window = &self.app_window.window.unwrap() {
+            let events = self.app_window.events.as_ref().unwrap();
+            while !window.should_close() {
+                if let Some(ref mut glfw) = self.app_window.glfw {
+                    glfw.poll_events();
+                }
+                for (_, event) in glfw::flush_messages(&events) {
+                    handle_window_event(&mut window, event);
+                }
+
+                self.draw_frame();
             }
-            for (_, event) in glfw::flush_messages(&events) {
-                handle_window_event(&mut window, event);
-            }
+
+            unsafe {
+                let _ = self.device.device_wait_idle();
+            };
         }
     }
 }
@@ -591,6 +855,16 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         unsafe {
+            self.device
+                .destroy_semaphore(self.sync_objects.render_finished_semaphore, None);
+            self.device
+                .destroy_semaphore(self.sync_objects.image_available_semaphore, None);
+            self.device
+                .destroy_fence(self.sync_objects.in_flight_fence, None);
+            self.device.destroy_command_pool(self.command_pool, None);
+            for &framebuffer in self.framebuffers.iter() {
+                self.device.destroy_framebuffer(framebuffer, None);
+            }
             self.device
                 .destroy_pipeline(self.graphics_pipeline_stuff.graphics_pipeline, None);
             self.device
