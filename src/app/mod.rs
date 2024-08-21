@@ -3,7 +3,8 @@ extern crate glfw;
 
 use crate::util::constants::{DEVICE_EXTENSIONS, VALIDATION, WINDOW_HEIGHT, WINDOW_WIDTH};
 use crate::util::structures::{
-    AppWindow, QueueFamilyIndices, SurfaceStuff, SwapChainStuff, SwapChainSupportDetails,
+    AppWindow, GraphicsPipelineStuff, QueueFamilyIndices, SurfaceStuff, SwapChainStuff,
+    SwapChainSupportDetails,
 };
 use crate::util::{debug, tools};
 use ash::{vk, Entry};
@@ -24,6 +25,8 @@ pub struct App {
     surface_stuff: SurfaceStuff,
     swapchain_stuff: SwapChainStuff,
     swapchain_imageviews: Vec<vk::ImageView>,
+    graphics_pipeline_stuff: GraphicsPipelineStuff,
+    render_pass: vk::RenderPass,
 }
 
 impl App {
@@ -40,7 +43,9 @@ impl App {
 
         let graphic_queue = unsafe { device.get_device_queue(indices.graphics_family.unwrap(), 0) };
         let present_queue = unsafe { device.get_device_queue(indices.present_family.unwrap(), 0) };
+
         let queue_family = App::find_queue_family(&instance, &physical_device, &surface_stuff);
+
         let swapchain_stuff = App::create_swapchain(
             &instance,
             &surface_stuff,
@@ -48,10 +53,12 @@ impl App {
             &device,
             &queue_family,
         );
-
         let swapchain_imageviews = App::create_image_view(&device, &swapchain_stuff);
 
-        graphics_pipeline::create_graphics_pipeline(&device);
+        let render_pass =
+            graphics_pipeline::creat_render_pass(&device, swapchain_stuff.swapchain_format.clone());
+        let graphics_pipeline_stuff =
+            graphics_pipeline::create_graphics_pipeline(&device, render_pass.clone());
 
         App {
             _entry: entry,
@@ -64,6 +71,8 @@ impl App {
             surface_stuff,
             swapchain_stuff,
             swapchain_imageviews,
+            graphics_pipeline_stuff,
+            render_pass,
         }
     }
     fn create_instance(entry: &ash::Entry, app_window: &AppWindow) -> ash::Instance {
@@ -582,6 +591,11 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         unsafe {
+            self.device
+                .destroy_pipeline(self.graphics_pipeline_stuff.graphics_pipeline, None);
+            self.device
+                .destroy_pipeline_layout(self.graphics_pipeline_stuff.pipeline_layout, None);
+            self.device.destroy_render_pass(self.render_pass, None);
             for &imageview in &self.swapchain_imageviews {
                 self.device.destroy_image_view(imageview, None);
             }

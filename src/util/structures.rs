@@ -44,3 +44,8 @@ pub struct SwapChainSupportDetails {
     pub formats: Vec<vk::SurfaceFormatKHR>,
     pub present_modes: Vec<vk::PresentModeKHR>,
 }
+
+pub struct GraphicsPipelineStuff {
+    pub graphics_pipeline: vk::Pipeline,
+    pub pipeline_layout: vk::PipelineLayout,
+}
