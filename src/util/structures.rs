@@ -11,9 +11,9 @@ pub struct DeviceExtension {
 }
 
 pub struct AppWindow {
-    pub window: Option<glfw::PWindow>,
-    pub events: Option<glfw::GlfwReceiver<(f64, WindowEvent)>>,
-    pub glfw: Option<glfw::Glfw>,
+    pub window: glfw::PWindow,
+    pub events: glfw::GlfwReceiver<(f64, WindowEvent)>,
+    pub glfw: glfw::Glfw,
 }
 
 pub struct SurfaceStuff {

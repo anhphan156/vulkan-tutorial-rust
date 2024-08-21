@@ -37,7 +37,7 @@ pub struct App {
 impl App {
     pub fn new() -> App {
         let app_window = App::init_window();
-        let window = app_window.window.as_ref().unwrap();
+        let window = &app_window.window;
 
         let entry = unsafe { Entry::load() }.unwrap();
         let instance = App::create_instance(&entry, &app_window);
@@ -117,7 +117,7 @@ impl App {
         };
 
         // Get Extension names
-        let glfw = app_window.glfw.as_ref().unwrap();
+        let glfw = &app_window.glfw;
         let extension_names = glfw.get_required_instance_extensions().unwrap();
         let cstr_ext_names: Vec<_> = extension_names
             .iter()
@@ -474,7 +474,7 @@ impl App {
 
     fn record_command_buffer(&self, command_buffer: vk::CommandBuffer, image_index: u32) {
         let begin_info = vk::CommandBufferBeginInfo {
-            s_type: vk::StructureType::COMMAND_BUFFER_SUBMIT_INFO,
+            s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
             ..Default::default()
         };
 
@@ -733,7 +733,7 @@ impl App {
         queue_family_indices
     }
 
-    fn draw_frame(&mut self) {
+    fn draw_frame(&self) {
         unsafe {
             let _ = self.device.wait_for_fences(
                 &[self.sync_objects.in_flight_fence],
@@ -765,6 +765,7 @@ impl App {
             let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
             let submit_info = vk::SubmitInfo {
                 s_type: vk::StructureType::SUBMIT_INFO,
+                wait_semaphore_count: 1,
                 p_wait_semaphores: wait_semaphores.as_ptr(),
                 p_wait_dst_stage_mask: wait_stages.as_ptr(),
                 command_buffer_count: 1,
@@ -801,54 +802,41 @@ impl App {
     }
 
     fn init_window() -> AppWindow {
-        let mut app_window = AppWindow {
-            window: None,
-            events: None,
-            glfw: None,
-        };
+        let mut glfw = glfw::init(glfw::fail_on_errors).unwrap();
 
-        app_window.glfw = Some(glfw::init(glfw::fail_on_errors).unwrap());
+        glfw.window_hint(WindowHint::ClientApi(ClientApiHint::NoApi));
 
-        if let Some(ref mut glfw) = app_window.glfw {
-            glfw.window_hint(WindowHint::ClientApi(ClientApiHint::NoApi));
+        let (mut window, events) = glfw
+            .create_window(
+                WINDOW_WIDTH,
+                WINDOW_HEIGHT,
+                "Hello this is window",
+                glfw::WindowMode::Windowed,
+            )
+            .expect("Failed to create GLFW window.");
 
-            let (w, e) = glfw
-                .create_window(
-                    WINDOW_WIDTH,
-                    WINDOW_HEIGHT,
-                    "Hello this is window",
-                    glfw::WindowMode::Windowed,
-                )
-                .expect("Failed to create GLFW window.");
+        window.set_key_polling(true);
 
-            app_window.window = Some(w);
-            app_window.events = Some(e);
-
-            if let Some(ref mut window) = app_window.window {
-                window.set_key_polling(true);
-            }
+        AppWindow {
+            window,
+            events,
+            glfw,
         }
-
-        app_window
     }
     pub fn main_loop(&mut self) {
-        if let window = &self.app_window.window.unwrap() {
-            let events = self.app_window.events.as_ref().unwrap();
-            while !window.should_close() {
-                if let Some(ref mut glfw) = self.app_window.glfw {
-                    glfw.poll_events();
-                }
-                for (_, event) in glfw::flush_messages(&events) {
-                    handle_window_event(&mut window, event);
-                }
-
-                self.draw_frame();
+        let events = &self.app_window.events;
+        while !self.app_window.window.should_close() {
+            self.app_window.glfw.poll_events();
+            for (_, event) in glfw::flush_messages(&events) {
+                handle_window_event(&mut self.app_window.window, event);
             }
 
-            unsafe {
-                let _ = self.device.device_wait_idle();
-            };
+            self.draw_frame();
         }
+
+        unsafe {
+            let _ = self.device.device_wait_idle();
+        };
     }
 }
 
