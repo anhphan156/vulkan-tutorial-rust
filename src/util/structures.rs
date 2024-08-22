@@ -51,7 +51,7 @@ pub struct GraphicsPipelineStuff {
 }
 
 pub struct SyncObjects {
-    pub image_available_semaphore: vk::Semaphore,
-    pub render_finished_semaphore: vk::Semaphore,
-    pub in_flight_fence: vk::Fence,
+    pub image_available_semaphores: Vec<vk::Semaphore>,
+    pub render_finished_semaphores: Vec<vk::Semaphore>,
+    pub in_flight_fences: Vec<vk::Fence>,
 }

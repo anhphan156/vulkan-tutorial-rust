@@ -1,7 +1,9 @@
 pub mod graphics_pipeline;
 extern crate glfw;
 
-use crate::util::constants::{DEVICE_EXTENSIONS, VALIDATION, WINDOW_HEIGHT, WINDOW_WIDTH};
+use crate::util::constants::{
+    DEVICE_EXTENSIONS, MAX_FRAMES_IN_FLIGHT, VALIDATION, WINDOW_HEIGHT, WINDOW_WIDTH,
+};
 use crate::util::structures::{
     AppWindow, GraphicsPipelineStuff, QueueFamilyIndices, SurfaceStuff, SwapChainStuff,
     SwapChainSupportDetails, SyncObjects,
@@ -30,8 +32,9 @@ pub struct App {
     render_pass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
     command_pool: vk::CommandPool,
-    command_buffer: vk::CommandBuffer,
+    command_buffers: Vec<vk::CommandBuffer>,
     sync_objects: SyncObjects,
+    current_frame: usize,
 }
 
 impl App {
@@ -73,7 +76,7 @@ impl App {
         );
 
         let command_pool = App::create_command_pool(&device, &queue_family);
-        let command_buffer = App::create_command_buffer(&device, command_pool);
+        let command_buffers = App::create_command_buffers(&device, command_pool);
 
         let sync_objects = App::create_sync_objects(&device);
 
@@ -92,8 +95,9 @@ impl App {
             render_pass,
             framebuffers,
             command_pool,
-            command_buffer,
+            command_buffers,
             sync_objects,
+            current_frame: 0,
         }
     }
     fn create_instance(entry: &ash::Entry, app_window: &AppWindow) -> ash::Instance {
@@ -419,15 +423,15 @@ impl App {
         }
     }
 
-    fn create_command_buffer(
+    fn create_command_buffers(
         device: &ash::Device,
         command_pool: vk::CommandPool,
-    ) -> vk::CommandBuffer {
+    ) -> Vec<vk::CommandBuffer> {
         let alloc_info = vk::CommandBufferAllocateInfo {
             s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
             command_pool,
             level: vk::CommandBufferLevel::PRIMARY,
-            command_buffer_count: 1,
+            command_buffer_count: MAX_FRAMES_IN_FLIGHT,
             ..Default::default()
         };
 
@@ -435,9 +439,6 @@ impl App {
             device
                 .allocate_command_buffers(&alloc_info)
                 .expect("Failed to allocate command buffers")
-                .first()
-                .unwrap()
-                .clone()
         }
     }
 
@@ -454,20 +455,28 @@ impl App {
         };
 
         unsafe {
-            let image_available_semaphore = device
-                .create_semaphore(&semaphore_info, None)
-                .expect("Failed to create semaphore");
-            let render_finished_semaphore = device
-                .create_semaphore(&semaphore_info, None)
-                .expect("Failed to create semaphore");
-            let in_flight_fence = device
-                .create_fence(&fence_info, None)
-                .expect("Failed to create fence");
+            let mut image_available_semaphores =
+                vec![vk::Semaphore::null(); MAX_FRAMES_IN_FLIGHT as usize];
+            let mut render_finished_semaphores =
+                vec![vk::Semaphore::null(); MAX_FRAMES_IN_FLIGHT as usize];
+            let mut in_flight_fences = vec![vk::Fence::null(); MAX_FRAMES_IN_FLIGHT as usize];
+
+            for i in 0..MAX_FRAMES_IN_FLIGHT as usize {
+                image_available_semaphores[i] = device
+                    .create_semaphore(&semaphore_info, None)
+                    .expect("Failed to create semaphore");
+                render_finished_semaphores[i] = device
+                    .create_semaphore(&semaphore_info, None)
+                    .expect("Failed to create semaphore");
+                in_flight_fences[i] = device
+                    .create_fence(&fence_info, None)
+                    .expect("Failed to create fence");
+            }
 
             SyncObjects {
-                image_available_semaphore,
-                render_finished_semaphore,
-                in_flight_fence,
+                image_available_semaphores,
+                render_finished_semaphores,
+                in_flight_fences,
             }
         }
     }
@@ -733,35 +742,41 @@ impl App {
         queue_family_indices
     }
 
-    fn draw_frame(&self) {
+    fn draw_frame(&mut self) {
         unsafe {
             let _ = self.device.wait_for_fences(
-                &[self.sync_objects.in_flight_fence],
+                &[self.sync_objects.in_flight_fences[self.current_frame]],
                 true,
                 u64::max_value(),
             );
 
             let _ = self
                 .device
-                .reset_fences(&[self.sync_objects.in_flight_fence]);
+                .reset_fences(&[self.sync_objects.in_flight_fences[self.current_frame]]);
 
             let Ok((image_index, _)) = self.swapchain_stuff.swapchain_loader.acquire_next_image(
                 self.swapchain_stuff.swapchain,
                 u64::max_value(),
-                self.sync_objects.image_available_semaphore,
+                self.sync_objects.image_available_semaphores[self.current_frame],
                 vk::Fence::null(),
             ) else {
                 panic!("failed to acquire next images")
             };
 
-            let _ = self
-                .device
-                .reset_command_buffer(self.command_buffer, CommandBufferResetFlags::empty());
+            let _ = self.device.reset_command_buffer(
+                self.command_buffers[self.current_frame],
+                CommandBufferResetFlags::empty(),
+            );
 
-            self.record_command_buffer(self.command_buffer.clone(), image_index);
+            self.record_command_buffer(
+                self.command_buffers[self.current_frame].clone(),
+                image_index,
+            );
 
-            let wait_semaphores = [self.sync_objects.image_available_semaphore];
-            let signal_semaphores = [self.sync_objects.render_finished_semaphore];
+            let wait_semaphores =
+                [self.sync_objects.image_available_semaphores[self.current_frame]];
+            let signal_semaphores =
+                [self.sync_objects.render_finished_semaphores[self.current_frame]];
             let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
             let submit_info = vk::SubmitInfo {
                 s_type: vk::StructureType::SUBMIT_INFO,
@@ -769,7 +784,7 @@ impl App {
                 p_wait_semaphores: wait_semaphores.as_ptr(),
                 p_wait_dst_stage_mask: wait_stages.as_ptr(),
                 command_buffer_count: 1,
-                p_command_buffers: &self.command_buffer,
+                p_command_buffers: &self.command_buffers[self.current_frame],
                 signal_semaphore_count: 1,
                 p_signal_semaphores: signal_semaphores.as_ptr(),
                 ..Default::default()
@@ -779,7 +794,7 @@ impl App {
                 .queue_submit(
                     self._graphic_queue,
                     &[submit_info],
-                    self.sync_objects.in_flight_fence,
+                    self.sync_objects.in_flight_fences[self.current_frame],
                 )
                 .expect("Failed to submit draw command buffer");
 
@@ -799,6 +814,8 @@ impl App {
                 .queue_present(self._present_queue, &present_info)
                 .expect("Failed to present");
         };
+
+        self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT as usize;
     }
 
     fn init_window() -> AppWindow {
@@ -824,14 +841,17 @@ impl App {
         }
     }
     pub fn main_loop(&mut self) {
-        let events = &self.app_window.events;
+        let mut frame_count: f64 = 0.0_f64;
         while !self.app_window.window.should_close() {
             self.app_window.glfw.poll_events();
-            for (_, event) in glfw::flush_messages(&events) {
+            for (_, event) in glfw::flush_messages(&self.app_window.events) {
                 handle_window_event(&mut self.app_window.window, event);
             }
 
             self.draw_frame();
+            frame_count += 1.0_f64;
+            let t = self.app_window.glfw.get_time();
+            println!("{}", frame_count / t);
         }
 
         unsafe {
@@ -843,12 +863,14 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         unsafe {
-            self.device
-                .destroy_semaphore(self.sync_objects.render_finished_semaphore, None);
-            self.device
-                .destroy_semaphore(self.sync_objects.image_available_semaphore, None);
-            self.device
-                .destroy_fence(self.sync_objects.in_flight_fence, None);
+            for i in 0..MAX_FRAMES_IN_FLIGHT as usize {
+                self.device
+                    .destroy_semaphore(self.sync_objects.render_finished_semaphores[i], None);
+                self.device
+                    .destroy_semaphore(self.sync_objects.image_available_semaphores[i], None);
+                self.device
+                    .destroy_fence(self.sync_objects.in_flight_fences[i], None);
+            }
             self.device.destroy_command_pool(self.command_pool, None);
             for &framebuffer in self.framebuffers.iter() {
                 self.device.destroy_framebuffer(framebuffer, None);
